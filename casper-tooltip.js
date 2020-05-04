@@ -21,7 +21,7 @@
 import { PolymerElement, html } from '@polymer/polymer/polymer-element.js';
 
 class CasperTooltip extends PolymerElement {
-  static get template() {
+  static get template () {
     return html`
       <style>
         :host {
@@ -52,27 +52,31 @@ class CasperTooltip extends PolymerElement {
         }
 
         #text {
-          text-transform: uppercase;
-          text-align: center;
-          position: absolute;
+          color: white;
           padding: 5px;
           font-size: 10px;
-          color: white;
           cursor: pointer;
+          position: absolute;
+          text-align: center;
+          text-transform: uppercase;
         }
-
       </style>
       <canvas id="canvas"></canvas>
       <div id="text"></div>
     `;
   }
 
-  static get is () {
-    return 'casper-tooltip';
-  }
-
   static get properties () {
     return {
+      /**
+       * This property states where the tooltip will appear.
+       *
+       *
+       */
+      tooltipPosition: {
+        type: String,
+        value: 'bottom'
+      },
       radius: {
         type: Number,
         value: 5
@@ -89,10 +93,6 @@ class CasperTooltip extends PolymerElement {
         type: Number,
         value: 0.5
       },
-      tipEdge: {
-        type: String,
-        value: 'N'
-      },
       positionTarget: {
         type: Element
       },
@@ -104,14 +104,14 @@ class CasperTooltip extends PolymerElement {
 
   ready () {
     super.ready();
-    this._ctx = this.$.canvas.getContext('2d');
-    this._setupPixelRatio();
+    this.__canvasContext = this.$.canvas.getContext('2d');
+    this.__setupPixelRatio();
     this.addEventListener('click', e => this.hide(e));
   }
 
   connectedCallback () {
     super.connectedCallback();
-    this._showing = false;
+    this.__showing = false;
     this.setVisible(false);
   }
 
@@ -119,41 +119,41 @@ class CasperTooltip extends PolymerElement {
    * Function that is called to bind mouseMovement to look for tooltips
    */
   mouseMoveToolip (event, maxDepth = 3) {
-    let depth = 0;
-    const targetPath = event.composedPath ? event.composedPath() : event.path;
+    const eventPath = event.composedPath();
 
     // Still inside the Tooltip -- Abort
-    if ( this._tooltipBbox !== undefined ) {
-      if (event.clientX >= this._tooltipBbox.left && event.clientX <= this._tooltipBbox.right &&
-          event.clientY >= this._tooltipBbox.top  && event.clientY <= this._tooltipBbox.bottom) {
-        return;
-      }
+    if (this.__tooltipBounds) {
+      if (event.clientY >= this.__tooltipBounds.top &&
+        event.clientX >= this.__tooltipBounds.left &&
+        event.clientX <= this.__tooltipBounds.right &&
+        event.clientY <= this.__tooltipBounds.bottom) return;
+
       this.hide();
-      this._tooltipBbox = undefined;
+      this.__tooltipBounds = undefined;
     }
 
-    let firstTargetableElement = undefined;
-    // Find a tooltip, and open it at the first element
-    for ( let target of targetPath ) {
-      if ( target instanceof HTMLElement && target.tagName !== 'SLOT' ) {
-        if ( firstTargetableElement === undefined && !target.hasAttribute('no-tooltip') ) {
-          firstTargetableElement = target;
-        }
-        const tooltip = target.tooltip ? (target.tooltip === this ? undefined : target.tooltip) : target.getAttribute('tooltip');
-        if ( tooltip && firstTargetableElement ) {
-          this._tooltipBbox = target.getBoundingClientRect();
-          this.show(tooltip, firstTargetableElement);
+    let depth = 0;
+
+    // Find a tooltip, and open it at the first element.
+    for (let element of eventPath) {
+      if (element instanceof HTMLElement && element.nodeName.toLowerCase() !== 'slot') {
+        // Get the tooltip's text and position.
+        const tooltipText = element.tooltip || element.getAttribute('tooltip');
+        const tooltipPosition = element.tooltipPosition || element.getAttribute('tooltip-position') || 'bottom';
+
+        if (tooltipText) {
+          this.__tooltipBounds = element.getBoundingClientRect();
+          this.show(element, tooltipText, tooltipPosition);
           return;
         }
       }
-      if ( ++depth === maxDepth ) {
-        break;
-      }
+
+      if (++depth === maxDepth) break;
     }
   }
 
   setVisible (visible) {
-    if ( visible ) {
+    if (visible) {
       this.$.canvas.classList.remove('hidden');
       this.$.text.classList.remove('hidden');
       this.$.canvas.classList.add('visible');
@@ -176,179 +176,182 @@ class CasperTooltip extends PolymerElement {
    * @param content The html content to put inside the tooltip
    * @param positionTarget the element where the tooltip is positioned (or a target rectangle)
    */
-  show (content, positionTarget) {
-    let tooltipWidth, tooltipArrowX, tooltipLeft, arrowLoc, fitInto, positionRect;
+  show (positionTarget, tooltipText, tooltipPosition) {
+    this.tooltipPosition = tooltipPosition;
 
-    fitInto = this.fitInto.getBoundingClientRect();
-    if ( positionTarget === undefined ) {
-      positionRect = this.positionRect.getBoundingClientRect(); // use internal attribute target
-    } else {
-      if ( positionTarget instanceof Element ) {
-        positionTarget = positionTarget.getBoundingClientRect();
-      }
-      positionRect =  {
-        left:   positionTarget.left + fitInto.left,
-        top:    positionTarget.top  + fitInto.top,
-        bottom: positionTarget.top  + fitInto.top + positionTarget.height,
-        right:  positionTarget.left + fitInto.left + positionTarget.width,
-        width:  positionTarget.width,
-        height: positionTarget.height
-      };
-    }
+    const positionTargetRect = positionTarget.getBoundingClientRect();
+    const positionTargetBounds = {
+      top: positionTargetRect.top,
+      left: positionTargetRect.left,
+      width: positionTargetRect.width,
+      height: positionTargetRect.height,
+      right: positionTargetRect.left + positionTargetRect.width,
+      bottom: positionTargetRect.top + positionTargetRect.height,
+    };
 
-    this._showing = true;
+    this.__showing = true;
     this.setVisible(true);
 
     // ... set text and size the tooltip, max width up to 100% of page width ...
-    this.style.width = fitInto.width + 'px';
-    this.$.text.style.margin = '0px';
-    this.$.text.style.marginTop = this.tipHeight + 'px';
-    this.$.text.innerHTML = content;
+    this.style.width = `${document.body.offsetWidth}px`;
+    this.$.text.innerHTML = tooltipText;
+    this.$.text.style.margin = 0;
 
-    // ... layout the tooltip so that it's stays inside the page ...
-    tooltipWidth  = this.$.text.getBoundingClientRect().width;
-    tooltipArrowX = positionRect.left + positionRect.width / 2;
-    tooltipLeft   = tooltipArrowX - tooltipWidth / 2;
-    arrowLoc      = 0.5;
+    const tooltipRect = this.$.text.getBoundingClientRect();
 
-    if ( tooltipLeft < fitInto.left ) {
-      tooltipLeft = fitInto.left;
-      arrowLoc = (tooltipArrowX - tooltipLeft) / tooltipWidth;
-    } else if ( tooltipLeft + tooltipWidth > fitInto.left + fitInto.width ) {
-      tooltipLeft = fitInto.left + fitInto.width - tooltipWidth;
-      arrowLoc = (tooltipArrowX - tooltipLeft) / tooltipWidth;
+    let tooltipLeft, tooltipTop;
+    const positionTargetCenterY = positionTargetBounds.top + positionTargetBounds.height / 2;
+    const positionTargetCenterX = positionTargetBounds.left + positionTargetBounds.width / 2;
+
+    switch (this.tooltipPosition) {
+      case 'bottom':
+        tooltipTop = positionTargetBounds.bottom;
+        tooltipLeft = positionTargetCenterX - tooltipRect.width / 2;
+        this.$.text.style.margin = `${this.tipHeight}px 0 0 0`;
+        break;
+      case 'top':
+        tooltipTop = positionTargetBounds.top - tooltipRect.height - this.tipHeight;
+        tooltipLeft = positionTargetCenterX - tooltipRect.width / 2;
+        this.$.text.style.margin = `0 0 ${this.tipHeight}px 0`;
+        break;
+      case 'left':
+        tooltipTop = positionTargetCenterY - tooltipRect.height / 2;
+        tooltipLeft = positionTargetBounds.left - tooltipRect.width - this.tipBase;
+        break;
+      case 'right':
+        tooltipTop = positionTargetCenterY - tooltipRect.height / 2;
+        tooltipLeft = positionTargetBounds.right;
+        this.$.text.style.margin = `0 0 0 ${this.tipHeight}px`;
+        break;
     }
 
-    // ... position relative to fitInto and show the tooltip ...
-    this.tipLocation = arrowLoc;
-    this.style.left = tooltipLeft - fitInto.left + 'px';
-    this.style.top  = positionRect.bottom - fitInto.top  + 'px';
-    this._updateBalloon();
+    this.tipLocation = 0.5;
+    this.style.top = `${tooltipTop}px`;
+    this.style.left = `${tooltipLeft}px`;
+    this.__updateBalloon(tooltipPosition);
   }
 
   hide () {
     // If the tooltip is already hidden, there's nothing to do.
-    if (!this._showing) {
-      return;
-    }
-    this._showing = false;
+    if (!this.__showing) return;
+
+    this.__showing = false;
     this.setVisible(false);
   }
 
-  _updateBalloon () {
-    let width, height, bb;
+  __updateBalloon (tooltipPosition) {
+    let width, height;
 
-    bb = this.$.text.getBoundingClientRect();
-    switch(this.tipEdge) {
-      case 'N':
-      case 'S':
-        height = bb.height + this.tipHeight;
-        width  = bb.width;
+    const tooltipTextRect = this.$.text.getBoundingClientRect();
+    switch (tooltipPosition) {
+      case 'top':
+      case 'bottom':
+        height = tooltipTextRect.height + this.tipHeight;
+        width = tooltipTextRect.width;
         break;
-      case 'W':
-      case 'E':
-        height = bb.height;
-        width  = bb.width + this.tipHeight + this.radius;
+      case 'left':
+      case 'right':
+        height = tooltipTextRect.height;
+        width = tooltipTextRect.width + this.tipHeight + this.radius;
         break;
     }
-    this.$.canvas.width = width * this._ratio;
-    this.$.canvas.height = height * this._ratio;
-    this.$.canvas.style.width  = width + 'px';
-    this.$.canvas.style.height = height + 'px';
-    this._paintBalloon(width - 1, height -1);
+
+    this.$.canvas.style.width = `${width}px`;
+    this.$.canvas.style.height = `${height}px`;
+    this.$.canvas.width = width * this.__ratio;
+    this.$.canvas.height = height * this.__ratio;
+    this.__paintBalloon(width - 1, height - 1);
   }
 
   /**
    * @brief Determine the device pixel ratio: 1 on classical displays 2 on retina/UHD displays
    */
-  _setupPixelRatio () {
-    let devicePixelRatio  = window.devicePixelRatio || 1;
-    if (devicePixelRatio > 1.6) {
-      devicePixelRatio = 2;
-    } else {
-      devicePixelRatio = 1;
-    }
-    let backingStoreRatio = this._ctx.webkitBackingStorePixelRatio ||
-                            this._ctx.mozBackingStorePixelRatio ||
-                            this._ctx.msBackingStorePixelRatio ||
-                            this._ctx.oBackingStorePixelRatio ||
-                            this._ctx.backingStorePixelRatio || 1;
-    this._ratio = devicePixelRatio / backingStoreRatio;
+  __setupPixelRatio () {
+    const devicePixelRatio = (window.devicePixelRatio || 1) > 1.6 ? 2 : 1;
+    const backingStoreRatio = this.__canvasContext.webkitBackingStorePixelRatio ||
+      this.__canvasContext.mozBackingStorePixelRatio ||
+      this.__canvasContext.msBackingStorePixelRatio ||
+      this.__canvasContext.oBackingStorePixelRatio ||
+      this.__canvasContext.backingStorePixelRatio || 1;
+
+    this.__ratio = devicePixelRatio / backingStoreRatio;
   }
 
   /**
-   * @brief Prepares a rounded rect path, does not paint or stroke it
+   * @brief Prepares a rounded rect path, does not paint or stroke it.
    *
-   * @param {number} x upper left corner
-   * @param {number} y upper left corner
-   * @param {number} w width of the round rectangle
-   * @param {number} h height of the round rectangle
-   * @param {number} r corner radius
+   * @param {Number} x Upper left corner.
+   * @param {Number} y upper left corner.
+   * @param {Number} w Width of the round rectangle.
+   * @param {Number} h Height of the round rectangle.
+   * @param {Number} r Corner radius.
    */
-  _makeRoundRectPath (x, y, w, h, r) {
-    this._ctx.moveTo( x + r, y );
-    this._ctx.arcTo(  x + w, y    , x + w    , y + r    , r);
-    this._ctx.arcTo(  x + w, y + h, x + w - r, y + h    , r);
-    this._ctx.arcTo(  x    , y + h, x        , y + h - r, r);
-    this._ctx.arcTo(  x    , y    , x + r    , y        , r);
+  __makeRoundRectPath (x, y, w, h, r) {
+    this.__canvasContext.moveTo(x + r, y);
+    this.__canvasContext.arcTo(x + w, y, x + w, y + r, r);
+    this.__canvasContext.arcTo(x + w, y + h, x + w - r, y + h, r);
+    this.__canvasContext.arcTo(x, y + h, x, y + h - r, r);
+    this.__canvasContext.arcTo(x, y, x + r, y, r);
   }
 
   /**
-   * Paints the balloon shape on the canvas object
+   * Paints the balloon shape on the canvas object.
    *
-   * @param {number} width width in pixels of the balloon
-   * @param {number} height height in pixels of the balloon
+   * @param {Number} width The balloon's width in pixels.
+   * @param {Number} height The balloon's height in pixels.
    */
-  _paintBalloon (width, height) {
-    let tipLocation, tipHeight, tipBase, radius;
+  __paintBalloon (width, height) {
+    let tipLocation;
 
-    this._ctx.fillStyle = '#000';
-    this._ctx.globalAlpha = 0.75;
+    this.__canvasContext.fillStyle = '#000';
+    this.__canvasContext.globalAlpha = 0.75;
 
-    radius    = this.radius    * this._ratio;
-    tipHeight = this.tipHeight * this._ratio;
-    tipBase   = this.tipBase   * this._ratio;
-    width    *= this._ratio;
-    height   *= this._ratio;
-    this._ctx.beginPath();
-    switch (this.tipEdge) {
-      case 'N':
-      default:
-        this._makeRoundRectPath(0, 0 + tipHeight, width, height - tipHeight, radius);
+    const radius = this.radius * this.__ratio;
+    const tipBase = this.tipBase * this.__ratio;
+    const tipHeight = this.tipHeight * this.__ratio;
+
+    width *= this.__ratio;
+    height *= this.__ratio;
+
+    this.__canvasContext.beginPath();
+    switch (this.tooltipPosition) {
+      case 'bottom':
+        this.__makeRoundRectPath(0, 0 + tipHeight, width, height - tipHeight, radius);
         tipLocation = Math.round(0 + width * this.tipLocation);
-        this._ctx.moveTo(tipLocation, 0);
-        this._ctx.lineTo(tipLocation + Math.round(tipBase / 2), 0 + tipHeight);
-        this._ctx.lineTo(tipLocation - Math.round(tipBase / 2), 0 + tipHeight);
-        this._ctx.lineTo(tipLocation, 0);
+        this.__canvasContext.moveTo(tipLocation, 0);
+        this.__canvasContext.lineTo(tipLocation + Math.round(tipBase / 2), 0 + tipHeight);
+        this.__canvasContext.lineTo(tipLocation - Math.round(tipBase / 2), 0 + tipHeight);
+        this.__canvasContext.lineTo(tipLocation, 0);
         break;
-      case 'E':
-        this._makeRoundRectPath(0, 0, width - tipHeight, height, radius);
+      case 'left':
+        this.__makeRoundRectPath(0, 0, width - tipHeight, height, radius);
         tipLocation = Math.round(0 + height * this.tipLocation);
-        this._ctx.moveTo(0 + width, tipLocation);
-        this._ctx.lineTo(0 + width - tipHeight, Math.round(tipLocation - tipBase/ 2));
-        this._ctx.lineTo(0 + width - tipHeight, Math.round(tipLocation + tipBase/ 2));
-        this._ctx.lineTo(0 + width, tipLocation);
+        this.__canvasContext.moveTo(0 + width, tipLocation);
+        this.__canvasContext.lineTo(0 + width - tipHeight, Math.round(tipLocation - tipBase / 2));
+        this.__canvasContext.lineTo(0 + width - tipHeight, Math.round(tipLocation + tipBase / 2));
+        this.__canvasContext.lineTo(0 + width, tipLocation);
         break;
-      case 'S':
-        this._makeRoundRectPath(0, 0, width, height - tipHeight, radius);
+      case 'top':
+        this.__makeRoundRectPath(0, 0, width, height - tipHeight, radius);
         tipLocation = Math.round(0 + width * this.tipLocation);
-        this._ctx.moveTo(tipLocation, 0 + height);
-        this._ctx.lineTo(tipLocation + Math.round(tipBase / 2), 0 + height - tipHeight);
-        this._ctx.lineTo(tipLocation - Math.round(tipBase / 2), 0 + height - tipHeight);
-        this._ctx.lineTo(tipLocation, 0 + height);
+        this.__canvasContext.moveTo(tipLocation, 0 + height);
+        this.__canvasContext.lineTo(tipLocation + Math.round(tipBase / 2), 0 + height - tipHeight);
+        this.__canvasContext.lineTo(tipLocation - Math.round(tipBase / 2), 0 + height - tipHeight);
+        this.__canvasContext.lineTo(tipLocation, 0 + height);
         break;
-      case 'W':
-        this._makeRoundRectPath(0 + tipHeight, 0, width - tipHeight, height, radius);
+      case 'right':
+        this.__makeRoundRectPath(0 + tipHeight, 0, width - tipHeight, height, radius);
         tipLocation = Math.round(0 + height * this.tipLocation);
-        this._ctx.moveTo(0, tipLocation);
-        this._ctx.lineTo(0 + tipHeight, Math.round(tipLocation - tipBase/ 2));
-        this._ctx.lineTo(0 + tipHeight, Math.round(tipLocation + tipBase/ 2));
-        this._ctx.lineTo(0, tipLocation);
+        this.__canvasContext.moveTo(0, tipLocation);
+        this.__canvasContext.lineTo(0 + tipHeight, Math.round(tipLocation - tipBase / 2));
+        this.__canvasContext.lineTo(0 + tipHeight, Math.round(tipLocation + tipBase / 2));
+        this.__canvasContext.lineTo(0, tipLocation);
         break;
     }
-    this._ctx.closePath();
-    this._ctx.fill();
+
+    this.__canvasContext.closePath();
+    this.__canvasContext.fill();
   }
 }
 
-window.customElements.define(CasperTooltip.is, CasperTooltip);
+window.customElements.define('casper-tooltip', CasperTooltip);
